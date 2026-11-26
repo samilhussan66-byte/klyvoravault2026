@@ -144,7 +144,10 @@ class LoginActivity : AppCompatActivity() {
                 etPassword.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 btnToggleEye.text = "Show"
             }
-            etPassword.setSelection(etPassword.text.length)
+            val currentLength = etPassword.text?.length ?: 0
+            if (currentLength >= 0) {
+                etPassword.setSelection(currentLength)
+            }
         }
 
         passwordRow.addView(etPassword)
@@ -204,4 +207,80 @@ class LoginActivity : AppCompatActivity() {
 
         fun applyMode() {
             tvStatus.visibility = View.GONE
-            if (isSignUpMode
+            if (isSignUpMode) {
+                tvHeading.text = "Create account"
+                tvSubheading.text = "Set up your credentials to get started"
+                btnSubmit.text = "Create Account"
+                tvSwitchPrompt.text = "Already have an account? "
+                tvSwitchAction.text = "Sign in"
+            } else {
+                tvHeading.text = "Welcome back"
+                tvSubheading.text = "Sign in to access your workspace"
+                btnSubmit.text = "Sign In"
+                tvSwitchPrompt.text = "Don't have an account? "
+                tvSwitchAction.text = "Create account"
+            }
+        }
+
+        tvSwitchAction.setOnClickListener {
+            isSignUpMode = !isSignUpMode
+            applyMode()
+        }
+
+        btnSubmit.setOnClickListener {
+            val email = etEmail.text.toString().trim().lowercase()
+            val password = etPassword.text.toString()
+
+            if (email.isEmpty() || !email.contains("@")) {
+                showStatus("Enter a valid email address")
+                return@setOnClickListener
+            }
+            if (password.length < 6) {
+                showStatus("Password must be at least 6 characters")
+                return@setOnClickListener
+            }
+
+            if (isSignUpMode) {
+                prefs.edit()
+                    .putString("account_email", email)
+                    .putString("account_password", password)
+                    .putBoolean("is_logged_in", true)
+                    .apply()
+                startActivity(Intent(this, MainActivity::class.java))
+                finish()
+            } else {
+                val savedEmail = prefs.getString("account_email", null)
+                val savedPassword = prefs.getString("account_password", null)
+
+                if (savedEmail == null || savedPassword == null) {
+                    showStatus("No account found. Create an account first")
+                    return@setOnClickListener
+                }
+
+                if (email == savedEmail && password == savedPassword) {
+                    prefs.edit().putBoolean("is_logged_in", true).apply()
+                    startActivity(Intent(this, MainActivity::class.java))
+                    finish()
+                } else {
+                    showStatus("Invalid email or password")
+                }
+            }
+        }
+
+        card.addView(lblEmail)
+        card.addView(etEmail)
+        card.addView(lblPassword)
+        card.addView(passwordRow)
+        card.addView(tvStatus)
+        card.addView(btnSubmit)
+
+        container.addView(badge)
+        container.addView(tvHeading)
+        container.addView(tvSubheading)
+        container.addView(card)
+        container.addView(switchRow)
+
+        root.addView(container)
+        setContentView(root)
+    }
+}
