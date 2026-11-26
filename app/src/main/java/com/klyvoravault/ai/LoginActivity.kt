@@ -31,200 +31,225 @@ class LoginActivity : AppCompatActivity() {
             return
         }
 
-        fun roundedBox(bgHex: String, strokeHex: String? = null, radiusDp: Float = 14f): GradientDrawable {
-            val density = resources.displayMetrics.density
+        fun boxDrawable(bgHex: String, strokeHex: String? = null, radiusDp: Float = 16f): GradientDrawable {
+            val d = resources.displayMetrics.density
             return GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = radiusDp * density
+                cornerRadius = radiusDp * d
                 setColor(Color.parseColor(bgHex))
                 if (strokeHex != null) {
-                    setStroke((1 * density).toInt(), Color.parseColor(strokeHex))
+                    setStroke((1.5f * d).toInt(), Color.parseColor(strokeHex))
                 }
             }
         }
 
-        val root = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#0B0F17"))
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#0A0F1A"))
             isFillViewport = true
         }
 
-        val container = LinearLayout(this).apply {
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(56, 72, 56, 72)
+            setPadding(48, 64, 48, 64)
         }
 
-        val badge = TextView(this).apply {
+        val headerBanner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = boxDrawable("#162447", "#2563EB", 22f)
+            setPadding(40, 36, 40, 36)
+        }
+
+        val tvBrand = TextView(this).apply {
             text = "KLYVORA VAULT"
-            setTextColor(Color.parseColor("#60A5FA"))
+            setTextColor(Color.parseColor("#93C5FD"))
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             letterSpacing = 0.14f
         }
 
-        val tvHeading = TextView(this).apply {
+        val tvTitle = TextView(this).apply {
             text = "Welcome back"
-            setTextColor(Color.parseColor("#F8FAFC"))
-            textSize = 30f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            textSize = 28f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 12, 0, 6)
+            setPadding(0, 10, 0, 6)
         }
 
-        val tvSubheading = TextView(this).apply {
-            text = "Sign in to access your workspace"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 15f
-            setPadding(0, 0, 0, 32)
+        val tvSubtitle = TextView(this).apply {
+            text = "Sign in to continue to your account"
+            setTextColor(Color.parseColor("#CBD5E1"))
+            textSize = 14f
         }
 
-        val card = LinearLayout(this).apply {
+        headerBanner.addView(tvBrand)
+        headerBanner.addView(tvTitle)
+        headerBanner.addView(tvSubtitle)
+
+        val formCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = roundedBox("#131A26", "#1E293B", 20f)
-            setPadding(44, 44, 44, 44)
+            background = boxDrawable("#111827", "#1F2937", 22f)
+            setPadding(40, 40, 40, 40)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = 28
+            layoutParams = lp
         }
 
         val lblEmail = TextView(this).apply {
             text = "Email"
-            setTextColor(Color.parseColor("#CBD5E1"))
+            setTextColor(Color.parseColor("#E2E8F0"))
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 0, 0, 10)
+            setPadding(2, 0, 0, 10)
         }
 
         val etEmail = EditText(this).apply {
-            hint = "name@example.com"
+            hint = "Enter email"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-            setTextColor(Color.parseColor("#F8FAFC"))
-            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.parseColor("#FFFFFF"))
+            setHintTextColor(Color.parseColor("#6B7280"))
             textSize = 15f
-            background = roundedBox("#0B0F17", "#263244", 12f)
-            setPadding(36, 30, 36, 30)
+            background = boxDrawable("#0A0F1A", "#2D3748", 14f)
+            setPadding(32, 28, 32, 28)
         }
 
         val lblPassword = TextView(this).apply {
             text = "Password"
-            setTextColor(Color.parseColor("#CBD5E1"))
+            setTextColor(Color.parseColor("#E2E8F0"))
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 28, 0, 10)
+            setPadding(2, 24, 0, 10)
         }
 
-        val passwordRow = LinearLayout(this).apply {
+        val passContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = roundedBox("#0B0F17", "#263244", 12f)
-            setPadding(36, 12, 20, 12)
+            background = boxDrawable("#0A0F1A", "#2D3748", 14f)
+            setPadding(32, 8, 20, 8)
         }
 
         val etPassword = EditText(this).apply {
-            hint = "Enter your password"
+            hint = "Password"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setTextColor(Color.parseColor("#F8FAFC"))
-            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.parseColor("#FFFFFF"))
+            setHintTextColor(Color.parseColor("#6B7280"))
             textSize = 15f
             background = null
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setPadding(0, 18, 16, 18)
+            setPadding(0, 20, 12, 20)
         }
 
-        val btnToggleEye = TextView(this).apply {
+        val btnEye = TextView(this).apply {
             text = "Show"
-            setTextColor(Color.parseColor("#93C5FD"))
+            setTextColor(Color.parseColor("#60A5FA"))
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(20, 14, 20, 14)
+            setPadding(18, 14, 14, 14)
         }
 
-        btnToggleEye.setOnClickListener {
+        btnEye.setOnClickListener {
             isPasswordVisible = !isPasswordVisible
             if (isPasswordVisible) {
                 etPassword.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-                btnToggleEye.text = "Hide"
+                btnEye.text = "Hide"
             } else {
                 etPassword.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                btnToggleEye.text = "Show"
+                btnEye.text = "Show"
             }
-            val currentLength = etPassword.text?.length ?: 0
-            if (currentLength >= 0) {
-                etPassword.setSelection(currentLength)
+            val len = etPassword.text?.length ?: 0
+            if (len >= 0) {
+                etPassword.setSelection(len)
             }
         }
 
-        passwordRow.addView(etPassword)
-        passwordRow.addView(btnToggleEye)
+        passContainer.addView(etPassword)
+        passContainer.addView(btnEye)
 
-        val tvStatus = TextView(this).apply {
+        val tvError = TextView(this).apply {
             text = ""
             setTextColor(Color.parseColor("#F87171"))
             textSize = 13f
             visibility = View.GONE
-            setPadding(4, 20, 4, 4)
+            setPadding(4, 18, 4, 2)
         }
 
-        fun showStatus(message: String, isError: Boolean = true) {
-            tvStatus.text = message
-            tvStatus.setTextColor(Color.parseColor(if (isError) "#F87171" else "#34D399"))
-            tvStatus.visibility = View.VISIBLE
+        fun setError(msg: String?) {
+            if (msg.isNullOrBlank()) {
+                tvError.visibility = View.GONE
+                tvError.text = ""
+            } else {
+                tvError.text = msg
+                tvError.visibility = View.VISIBLE
+            }
         }
 
         val btnSubmit = Button(this).apply {
             text = "Sign In"
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#FFFFFF"))
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             isAllCaps = false
-            background = roundedBox("#2563EB", null, 12f)
-            val params = LinearLayout.LayoutParams(
+            background = boxDrawable("#2563EB", null, 14f)
+            val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            params.topMargin = 32
-            layoutParams = params
-            setPadding(24, 32, 24, 32)
+            lp.topMargin = 28
+            layoutParams = lp
+            setPadding(24, 30, 24, 30)
         }
 
-        val switchRow = LinearLayout(this).apply {
+        val bottomRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, 32, 0, 0)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = 28
+            layoutParams = lp
         }
 
-        val tvSwitchPrompt = TextView(this).apply {
-            text = "Don't have an account? "
-            setTextColor(Color.parseColor("#94A3B8"))
+        val tvBottomText = TextView(this).apply {
+            text = "New to KlyvoraVault? "
+            setTextColor(Color.parseColor("#9CA3AF"))
             textSize = 14f
         }
 
-        val tvSwitchAction = TextView(this).apply {
+        val tvBottomAction = TextView(this).apply {
             text = "Create account"
             setTextColor(Color.parseColor("#60A5FA"))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(8, 6, 8, 6)
         }
 
-        switchRow.addView(tvSwitchPrompt)
-        switchRow.addView(tvSwitchAction)
+        bottomRow.addView(tvBottomText)
+        bottomRow.addView(tvBottomAction)
 
-        fun applyMode() {
-            tvStatus.visibility = View.GONE
+        fun updateMode() {
+            setError(null)
             if (isSignUpMode) {
-                tvHeading.text = "Create account"
-                tvSubheading.text = "Set up your credentials to get started"
+                tvTitle.text = "Create account"
+                tvSubtitle.text = "Register with your email and password"
                 btnSubmit.text = "Create Account"
-                tvSwitchPrompt.text = "Already have an account? "
-                tvSwitchAction.text = "Sign in"
+                tvBottomText.text = "Already registered? "
+                tvBottomAction.text = "Sign in"
             } else {
-                tvHeading.text = "Welcome back"
-                tvSubheading.text = "Sign in to access your workspace"
+                tvTitle.text = "Welcome back"
+                tvSubtitle.text = "Sign in to continue to your account"
                 btnSubmit.text = "Sign In"
-                tvSwitchPrompt.text = "Don't have an account? "
-                tvSwitchAction.text = "Create account"
+                tvBottomText.text = "New to KlyvoraVault? "
+                tvBottomAction.text = "Create account"
             }
         }
 
-        tvSwitchAction.setOnClickListener {
+        tvBottomAction.setOnClickListener {
             isSignUpMode = !isSignUpMode
-            applyMode()
+            updateMode()
         }
 
         btnSubmit.setOnClickListener {
@@ -232,55 +257,54 @@ class LoginActivity : AppCompatActivity() {
             val password = etPassword.text.toString()
 
             if (email.isEmpty() || !email.contains("@")) {
-                showStatus("Enter a valid email address")
+                setError("Please enter a valid email")
                 return@setOnClickListener
             }
             if (password.length < 6) {
-                showStatus("Password must be at least 6 characters")
+                setError("Password must be at least 6 characters")
                 return@setOnClickListener
             }
 
+            setError(null)
             if (isSignUpMode) {
                 prefs.edit()
-                    .putString("account_email", email)
-                    .putString("account_password", password)
+                    .putString("user_email", email)
+                    .putString("user_password", password)
                     .putBoolean("is_logged_in", true)
                     .apply()
                 startActivity(Intent(this, MainActivity::class.java))
                 finish()
             } else {
-                val savedEmail = prefs.getString("account_email", null)
-                val savedPassword = prefs.getString("account_password", null)
+                val savedEmail = prefs.getString("user_email", null)
+                val savedPass = prefs.getString("user_password", null)
 
-                if (savedEmail == null || savedPassword == null) {
-                    showStatus("No account found. Create an account first")
+                if (savedEmail == null || savedPass == null) {
+                    setError("Account not found. Tap Create account")
                     return@setOnClickListener
                 }
 
-                if (email == savedEmail && password == savedPassword) {
+                if (email == savedEmail && password == savedPass) {
                     prefs.edit().putBoolean("is_logged_in", true).apply()
                     startActivity(Intent(this, MainActivity::class.java))
                     finish()
                 } else {
-                    showStatus("Invalid email or password")
+                    setError("Incorrect email or password")
                 }
             }
         }
 
-        card.addView(lblEmail)
-        card.addView(etEmail)
-        card.addView(lblPassword)
-        card.addView(passwordRow)
-        card.addView(tvStatus)
-        card.addView(btnSubmit)
+        formCard.addView(lblEmail)
+        formCard.addView(etEmail)
+        formCard.addView(lblPassword)
+        formCard.addView(passContainer)
+        formCard.addView(tvError)
+        formCard.addView(btnSubmit)
 
-        container.addView(badge)
-        container.addView(tvHeading)
-        container.addView(tvSubheading)
-        container.addView(card)
-        container.addView(switchRow)
+        page.addView(headerBanner)
+        page.addView(formCard)
+        page.addView(bottomRow)
 
-        root.addView(container)
-        setContentView(root)
+        scroll.addView(page)
+        setContentView(scroll)
     }
 }
