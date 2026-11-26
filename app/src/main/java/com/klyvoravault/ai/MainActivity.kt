@@ -13,13 +13,20 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -27,6 +34,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -34,43 +43,40 @@ import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnInitListener {
 
-    private lateinit var tvStatusBanner: TextView
-    private lateinit var tvAssistantReply: TextView
-    private lateinit var tvVoiceResult: TextView
+    private lateinit var tvEngineState: TextView
+    private lateinit var tvLastHeard: TextView
     private lateinit var tvTheftStatus: TextView
-    private lateinit var btnArmTheft: Button
-    private lateinit var etQuickCommand: EditText
+    private lateinit var btnEngineToggle: Button
+    private lateinit var btnArmGuard: Button
+    private lateinit var tvRulesSummary: TextView
+    private lateinit var etWakeWord: EditText
+    private lateinit var etCommandWord: EditText
+    private lateinit var etCommandAction: EditText
+    private lateinit var etManualCmd: EditText
 
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
+
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isListeningEngineActive = false
     private var isGuardArmed = false
+    private var wakeWord = "klyvora"
     private var lastShakeTime = 0L
 
-    private val speechLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            val spokenText = matches?.firstOrNull()?.trim().orEmpty()
-            if (spokenText.isNotEmpty()) {
-                processCommand(spokenText, fromVoice = true)
-            } else {
-                reply("Kuch sunai nahi diya. Dobara bol kar try karein.", "#FBBF24", speak = false)
-            }
-        } else {
-            reply("Voice input band kar diya gaya.", "#94A3B8", speak = false)
-        }
-    }
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val commandRules = mutableListOf<Pair<String, String>>()
 
-    private val micPermissionLauncher = registerForActivityResult(
+    private val audioPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            startVoiceListening()
+            startContinuousEngine()
         } else {
-            reply("Voice command ke liye microphone permission zaroori hai.", "#F87171", speak = false)
+            isListeningEngineActive = false
+            updateEngineButton()
+            setEngineState("Microphone permission denied", "#F87171")
         }
     }
 
@@ -78,18 +84,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
         super.onCreate(savedInstanceState)
 
         tts = TextToSpeech(this, this)
-
         val prefs = getSharedPreferences("KlyvoraVaultSession", Context.MODE_PRIVATE)
-        val userEmail = prefs.getString("user_email", null)
+        val accountLabel = prefs.getString("user_email", null)
             ?: prefs.getString("user_phone", null)
-            ?: "Active Session"
+            ?: "Protected Device"
 
         isGuardArmed = prefs.getBoolean("anti_theft_armed", false)
+        wakeWord = prefs.getString("wake_word", "klyvora")?.lowercase(Locale.ROOT) ?: "klyvora"
+        loadRules(prefs)
+
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         val d = resources.displayMetrics.density
-        fun dp(value: Float): Int = (value * d).toInt()
+        fun dp(v: Float): Int = (v * d).toInt()
 
         fun box(bgHex: String, strokeHex: String? = null, radiusDp: Float = 16f): GradientDrawable {
             return GradientDrawable().apply {
@@ -102,328 +110,496 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
             }
         }
 
-        val bgGradient = GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(
-                Color.parseColor("#0A1326"),
-                Color.parseColor("#0D162B"),
-                Color.parseColor("#070B14")
-            )
-        )
+        fun card(badge: String, badgeBg: String, badgeFg: String, title: String): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = box("#0F172A", "#1E293B", 20f)
+                setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(14f) }
+
+                addView(TextView(this@MainActivity).apply {
+                    text = badge
+                    setTextColor(Color.parseColor(badgeFg))
+                    textSize = 10f
+                    typeface = Typeface.DEFAULT_BOLD
+                    background = box(badgeBg, null, 8f)
+                    setPadding(dp(9f), dp(4f), dp(9f), dp(4f))
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                })
+
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    setTextColor(Color.parseColor("#F8FAFC"))
+                    textSize = 16f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(8f), 0, dp(6f))
+                })
+            }
+        }
+
+        fun row(): LinearLayout {
+            return LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8f) }
+            }
+        }
+
+        fun btn(label: String, bgHex: String = "#1D4ED8", weight: Float = 1f, onClick: () -> Unit): Button {
+            return Button(this).apply {
+                text = label
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                isAllCaps = false
+                background = box(bgHex, null, 11f)
+                setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight).apply {
+                    leftMargin = dp(4f)
+                    rightMargin = dp(4f)
+                }
+                setOnClickListener { onClick() }
+            }
+        }
 
         val scroll = ScrollView(this).apply {
-            background = bgGradient
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(
+                    Color.parseColor("#0A1326"),
+                    Color.parseColor("#0D162B"),
+                    Color.parseColor("#070B14")
+                )
+            )
             isFillViewport = true
         }
 
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20f), dp(24f), dp(20f), dp(28f))
+            setPadding(dp(16f), dp(20f), dp(16f), dp(28f))
         }
 
-        val topBar = LinearLayout(this).apply {
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#111C33", "#2563EB", 20f)
-            setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
+            setPadding(dp(16f), dp(16f), dp(16f), dp(16f))
         }
-
-        val tvBrand = TextView(this).apply {
+        header.addView(TextView(this).apply {
             text = "KLYVORA VAULT"
             setTextColor(Color.parseColor("#93C5FD"))
-            textSize = 12f
+            textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             letterSpacing = 0.14f
-        }
-
-        val tvTitle = TextView(this).apply {
-            text = "Command Dashboard"
-            setTextColor(Color.parseColor("#FFFFFF"))
-            textSize = 22f
+        })
+        header.addView(TextView(this).apply {
+            text = "Autonomous Voice & Guard Core"
+            setTextColor(Color.WHITE)
+            textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(6f), 0, dp(4f))
-        }
-
-        val tvUser = TextView(this).apply {
-            text = userEmail
+            setPadding(0, dp(4f), 0, dp(2f))
+        })
+        header.addView(TextView(this).apply {
+            text = accountLabel
             setTextColor(Color.parseColor("#CBD5E1"))
-            textSize = 13f
-        }
+            textSize = 12f
+        })
 
-        topBar.addView(tvBrand)
-        topBar.addView(tvTitle)
-        topBar.addView(tvUser)
+        // 1. In-App Continuous Listener Card (no external Google mic dialog)
+        val engineCard = card("AUTONOMOUS LISTENER", "#172554", "#93C5FD", "In-App Voice & Wake-Word Engine")
 
-        tvStatusBanner = TextView(this).apply {
-            text = ""
-            textSize = 13f
-            visibility = View.GONE
-            background = box("#0F172A", "#1E293B", 14f)
-            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(14f)
-            layoutParams = lp
-        }
-
-        // Voice & Assistant Card with multiple quick options
-        val voiceCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = box("#0F172A", "#1E293B", 20f)
-            setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(14f)
-            layoutParams = lp
-        }
-
-        val tvVoiceBadge = TextView(this).apply {
-            text = "ASSISTANT & VOICE"
-            setTextColor(Color.parseColor("#93C5FD"))
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            background = box("#172554", null, 8f)
-            setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        val tvVoiceTitle = TextView(this).apply {
-            text = "Klyvora Command Center"
-            setTextColor(Color.parseColor("#F8FAFC"))
-            textSize = 17f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(10f), 0, dp(4f))
-        }
-
-        tvAssistantReply = TextView(this).apply {
-            text = "Assistant ready. Bolen ya neeche diye gaye options chunein."
+        tvEngineState = TextView(this).apply {
+            text = "Engine: STANDBY (Wake word: \"$wakeWord\")"
             setTextColor(Color.parseColor("#93C5FD"))
             textSize = 13f
-            setPadding(0, dp(2f), 0, dp(6f))
         }
 
-        tvVoiceResult = TextView(this).apply {
-            text = "Last input: None"
+        tvLastHeard = TextView(this).apply {
+            text = "Last detected speech: None"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 12f
+            setPadding(0, dp(4f), 0, dp(8f))
         }
 
-        val inputRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(12f)
-            layoutParams = lp
-        }
-
-        etQuickCommand = EditText(this).apply {
-            hint = "Command likhein (e.g. status, time, arm)"
+        val wakeRow = row()
+        etWakeWord = EditText(this).apply {
+            hint = "Wake word (e.g. klyvora)"
+            setText(wakeWord)
             setTextColor(Color.WHITE)
             setHintTextColor(Color.parseColor("#64748B"))
-            textSize = 13f
-            background = box("#090E1A", "#263244", 12f)
-            setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+            textSize = 12f
+            background = box("#090E1A", "#263244", 10f)
+            setPadding(dp(10f), dp(9f), dp(10f), dp(9f))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = dp(8f)
+                rightMargin = dp(6f)
             }
         }
+        wakeRow.addView(etWakeWord)
+        wakeRow.addView(btn("Save Wake Word", "#3730A3", 0.55f) {
+            val nextWake = etWakeWord.text.toString().trim().lowercase(Locale.ROOT)
+            if (nextWake.isNotEmpty()) {
+                wakeWord = nextWake
+                prefs.edit().putString("wake_word", wakeWord).apply()
+                setEngineState("Wake word updated to \"$wakeWord\"", "#34D399")
+            }
+        })
 
-        val btnRunText = Button(this).apply {
-            text = "Run"
+        val engineBtnRow = row()
+        btnEngineToggle = btn("Start Listener", "#059669", 1f) {
+            if (isListeningEngineActive) {
+                stopContinuousEngine()
+            } else {
+                requestAudioAndStart()
+            }
+        }
+        engineBtnRow.addView(btnEngineToggle)
+
+        val manualRow = row()
+        etManualCmd = EditText(this).apply {
+            hint = "Test command (e.g. alarm, battery, youtube, arm)"
             setTextColor(Color.WHITE)
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            background = box("#2563EB", null, 12f)
-            setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
-            setOnClickListener {
-                val cmd = etQuickCommand.text.toString().trim()
-                if (cmd.isNotEmpty()) {
-                    processCommand(cmd, fromVoice = false)
-                } else {
-                    reply("Pehle koi command likhein ya mic dabayein.", "#FBBF24", speak = false)
-                }
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 12f
+            background = box("#090E1A", "#263244", 10f)
+            setPadding(dp(10f), dp(9f), dp(10f), dp(9f))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(6f)
             }
         }
+        manualRow.addView(etManualCmd)
+        manualRow.addView(btn("Execute", "#2563EB", 0.4f) {
+            val cmd = etManualCmd.text.toString().trim()
+            if (cmd.isNotEmpty()) executeAction(cmd, "Manual")
+        })
 
-        inputRow.addView(etQuickCommand)
-        inputRow.addView(btnRunText)
+        engineCard.addView(tvEngineState)
+        engineCard.addView(tvLastHeard)
+        engineCard.addView(wakeRow)
+        engineCard.addView(engineBtnRow)
+        engineCard.addView(manualRow)
 
-        // Multiple quick action chips
-        val chipsScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(12f)
-            layoutParams = lp
-        }
+        // 2. Custom Command Rules Builder
+        val rulesCard = card("AUTOMATION RULES", "#1E1B4B", "#C4B5FD", "Saved Voice / Command Triggers")
 
-        val chipsRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        fun quickChip(label: String, commandToRun: String): Button {
-            return Button(this).apply {
-                text = label
-                setTextColor(Color.parseColor("#E2E8F0"))
-                textSize = 12f
-                isAllCaps = false
-                background = box("#111C33", "#263244", 10f)
-                setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
-                val clp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    rightMargin = dp(8f)
-                }
-                layoutParams = clp
-                setOnClickListener {
-                    processCommand(commandToRun, fromVoice = false)
-                }
-            }
-        }
-
-        chipsRow.addView(quickChip("System Status", "status"))
-        chipsRow.addView(quickChip("Time & Date", "time"))
-        chipsRow.addView(quickChip("Test Alert Tone", "alert"))
-        chipsRow.addView(quickChip("All Commands", "help"))
-        chipsScroll.addView(chipsRow)
-
-        val btnListen = Button(this).apply {
-            text = "Speak Voice Command"
+        val ruleInputs = row()
+        etCommandWord = EditText(this).apply {
+            hint = "Spoken word (e.g. siren)"
             setTextColor(Color.WHITE)
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            background = box("#1D4ED8", null, 12f)
-            val btnLp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            btnLp.topMargin = dp(14f)
-            layoutParams = btnLp
-            setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
-            setOnClickListener {
-                checkMicAndListen()
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 12f
+            background = box("#090E1A", "#263244", 10f)
+            setPadding(dp(10f), dp(9f), dp(10f), dp(9f))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(4f)
             }
         }
-
-        voiceCard.addView(tvVoiceBadge)
-        voiceCard.addView(tvVoiceTitle)
-        voiceCard.addView(tvAssistantReply)
-        voiceCard.addView(tvVoiceResult)
-        voiceCard.addView(inputRow)
-        voiceCard.addView(chipsScroll)
-        voiceCard.addView(btnListen)
-
-        // Anti-Theft Card
-        val theftCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = box("#0F172A", "#1E293B", 20f)
-            setPadding(dp(18f), dp(18f), dp(18f), dp(18f))
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(14f)
-            layoutParams = lp
+        etCommandAction = EditText(this).apply {
+            hint = "Action (alarm, arm, disarm, battery, youtube)"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 12f
+            background = box("#090E1A", "#263244", 10f)
+            setPadding(dp(10f), dp(9f), dp(10f), dp(9f))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(4f)
+            }
         }
+        ruleInputs.addView(etCommandWord)
+        ruleInputs.addView(etCommandAction)
 
-        val tvTheftBadge = TextView(this).apply {
-            text = "SECURITY"
-            setTextColor(Color.parseColor("#6EE7B7"))
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            background = box("#064E3B", null, 8f)
-            setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+        val saveRuleRow = row()
+        saveRuleRow.addView(btn("Save Rule", "#4F46E5", 1f) {
+            val w = etCommandWord.text.toString().trim().lowercase(Locale.ROOT)
+            val a = etCommandAction.text.toString().trim().lowercase(Locale.ROOT)
+            if (w.isNotEmpty() && a.isNotEmpty()) {
+                commandRules.removeAll { it.first == w }
+                commandRules.add(w to a)
+                saveRules(prefs)
+                renderRules()
+                etCommandWord.text.clear()
+                etCommandAction.text.clear()
+                setEngineState("Rule saved: \"$w\" -> $a", "#34D399")
+            }
+        })
+
+        tvRulesSummary = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#CBD5E1"))
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            ).apply { topMargin = dp(8f) }
         }
+        renderRules()
 
-        val tvTheftTitle = TextView(this).apply {
-            text = "Anti-Theft Motion Guard"
-            setTextColor(Color.parseColor("#F8FAFC"))
-            textSize = 17f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(10f), 0, dp(4f))
-        }
+        rulesCard.addView(ruleInputs)
+        rulesCard.addView(saveRuleRow)
+        rulesCard.addView(tvRulesSummary)
+
+        // 3. Anti-Theft Guard & Quick Controls
+        val guardCard = card("ANTI-THEFT & SYSTEM", "#064E3B", "#6EE7B7", "Motion Guard & Device Controls")
 
         tvTheftStatus = TextView(this).apply {
-            text = if (isGuardArmed) {
-                "Protection status: ARMED (Motion alert active)"
-            } else {
-                "Protection status: STANDBY"
-            }
+            text = if (isGuardArmed) "Guard: ARMED (Motion sensor active)" else "Guard: STANDBY"
             setTextColor(Color.parseColor(if (isGuardArmed) "#34D399" else "#94A3B8"))
             textSize = 13f
         }
 
-        btnArmTheft = Button(this).apply {
-            text = if (isGuardArmed) "Disarm Protection" else "Arm Protection"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            background = box(if (isGuardArmed) "#B91C1C" else "#1D4ED8", null, 12f)
-            val btnLp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            btnLp.topMargin = dp(14f)
-            layoutParams = btnLp
-            setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
-            setOnClickListener {
-                toggleGuardState(prefs)
-            }
+        val guardRow = row()
+        btnArmGuard = btn(
+            if (isGuardArmed) "Disarm Guard" else "Arm Guard",
+            if (isGuardArmed) "#B91C1C" else "#059669",
+            1f
+        ) {
+            toggleGuard(prefs)
         }
+        guardRow.addView(btnArmGuard)
 
-        theftCard.addView(tvTheftBadge)
-        theftCard.addView(tvTheftTitle)
-        theftCard.addView(tvTheftStatus)
-        theftCard.addView(btnArmTheft)
+        val quickRow1 = row()
+        quickRow1.addView(btn("Siren Alert", "#1E293B") { executeAction("alarm", "Quick") })
+        quickRow1.addView(btn("Battery Info", "#1E293B") { executeAction("battery", "Quick") })
+        quickRow1.addView(btn("System Time", "#1E293B") { executeAction("time", "Quick") })
+
+        val quickRow2 = row()
+        quickRow2.addView(btn("Open YouTube", "#1E293B") { executeAction("youtube", "Quick") })
+        quickRow2.addView(btn("App Settings", "#1E293B") {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        })
+
+        guardCard.addView(tvTheftStatus)
+        guardCard.addView(guardRow)
+        guardCard.addView(quickRow1)
+        guardCard.addView(quickRow2)
 
         val btnLogout = Button(this).apply {
             text = "Sign Out"
             setTextColor(Color.parseColor("#FCA5A5"))
-            textSize = 14f
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             isAllCaps = false
             background = box("#1A1219", "#7F1D1D", 12f)
-            val lp = LinearLayout.LayoutParams(
+            setPadding(dp(14f), dp(11f), dp(14f), dp(11f))
+            layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(20f)
-            layoutParams = lp
-            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+            ).apply { topMargin = dp(18f) }
+            setOnClickListener {
+                stopContinuousEngine()
+                prefs.edit().putBoolean("is_logged_in", false).apply()
+                startActivity(Intent(this@MainActivity, LoginActivity::class.java))
+                finish()
+            }
         }
 
-        btnLogout.setOnClickListener {
-            prefs.edit().putBoolean("is_logged_in", false).apply()
-            startActivity(Intent(this, LoginActivity::class.java))
-            finish()
-        }
-
-        page.addView(topBar)
-        page.addView(tvStatusBanner)
-        page.addView(voiceCard)
-        page.addView(theftCard)
+        page.addView(header)
+        page.addView(engineCard)
+        page.addView(rulesCard)
+        page.addView(guardCard)
         page.addView(btnLogout)
 
         scroll.addView(page)
         setContentView(scroll)
+    }
+
+    private fun requestAudioAndStart() {
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            startContinuousEngine()
+        } else {
+            audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun startContinuousEngine() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            setEngineState("In-app SpeechRecognizer unavailable on this device", "#F87171")
+            return
+        }
+        isListeningEngineActive = true
+        updateEngineButton()
+        setEngineState("Engine ACTIVE: Listening in-app (Wake: \"$wakeWord\")", "#34D399")
+        triggerInAppRecognizer()
+    }
+
+    private fun stopContinuousEngine() {
+        isListeningEngineActive = false
+        mainHandler.removeCallbacksAndMessages(null)
+        try {
+            speechRecognizer?.stopListening()
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {
+        }
+        speechRecognizer = null
+        updateEngineButton()
+        setEngineState("Engine STANDBY", "#94A3B8")
+    }
+
+    private fun triggerInAppRecognizer() {
+        if (!isListeningEngineActive) return
+        try {
+            speechRecognizer?.destroy()
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+            speechRecognizer = recognizer
+
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    if (isListeningEngineActive) {
+                        setEngineState("Listening... (Wake: \"$wakeWord\")", "#60A5FA")
+                    }
+                }
+
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+
+                override fun onError(error: Int) {
+                    if (isListeningEngineActive) {
+                        mainHandler.postDelayed({ triggerInAppRecognizer() }, 900L)
+                    }
+                }
+
+                override fun onResults(results: Bundle?) {
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val heard = matches?.firstOrNull()?.trim().orEmpty()
+                    if (heard.isNotEmpty()) {
+                        tvLastHeard.text = "Last detected speech: \"$heard\""
+                        val lower = heard.lowercase(Locale.ROOT)
+                        if (lower.contains(wakeWord) || commandRules.any { lower.contains(it.first) }) {
+                            executeAction(lower, "Voice")
+                        }
+                    }
+                    if (isListeningEngineActive) {
+                        mainHandler.postDelayed({ triggerInAppRecognizer() }, 500L)
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+            })
+
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            }
+            recognizer.startListening(intent)
+        } catch (_: Exception) {
+            if (isListeningEngineActive) {
+                mainHandler.postDelayed({ triggerInAppRecognizer() }, 1200L)
+            }
+        }
+    }
+
+    private fun updateEngineButton() {
+        btnEngineToggle.text = if (isListeningEngineActive) "Stop Listener" else "Start Listener"
+        btnEngineToggle.setBackgroundColor(Color.parseColor(if (isListeningEngineActive) "#B91C1C" else "#059669"))
+    }
+
+    private fun executeAction(rawInput: String, source: String) {
+        val lower = rawInput.lowercase(Locale.ROOT)
+        val matched = commandRules.firstOrNull { lower.contains(it.first) }
+        val target = matched?.second ?: lower
+        val prefs = getSharedPreferences("KlyvoraVaultSession", Context.MODE_PRIVATE)
+
+        when {
+            target.contains("alarm") || target.contains("siren") || target.contains("alert") -> {
+                playSiren()
+                setEngineState("[$source] Siren alert triggered", "#F87171")
+                speak("Alert triggered")
+            }
+            target.contains("disarm") || target.contains("unlock") -> {
+                if (isGuardArmed) toggleGuard(prefs)
+                else setEngineState("[$source] Guard already in STANDBY", "#FBBF24")
+            }
+            target.contains("arm") || target.contains("lock") || target.contains("guard") -> {
+                if (!isGuardArmed) toggleGuard(prefs)
+                else setEngineState("[$source] Guard already ARMED", "#34D399")
+            }
+            target.contains("battery") -> {
+                val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                val msg = if (pct >= 0) "Battery at $pct%" else "Battery unavailable"
+                setEngineState("[$source] $msg", "#60A5FA")
+                speak(msg)
+            }
+            target.contains("time") -> {
+                val now = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+                setEngineState("[$source] Time: $now", "#60A5FA")
+                speak("Time is $now")
+            }
+            target.contains("youtube") || target.contains("yt") -> {
+                try {
+                    val intent = packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+                        ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://m.youtube.com"))
+                    startActivity(intent)
+                    setEngineState("[$source] Opening YouTube", "#34D399")
+                } catch (_: Exception) {
+                    setEngineState("[$source] Unable to open YouTube", "#F87171")
+                }
+            }
+            else -> {
+                setEngineState("[$source] Heard \"$rawInput\" (no matching action)", "#94A3B8")
+            }
+        }
+    }
+
+    private fun toggleGuard(prefs: android.content.SharedPreferences) {
+        isGuardArmed = !isGuardArmed
+        prefs.edit().putBoolean("anti_theft_armed", isGuardArmed).apply()
+        tvTheftStatus.text = if (isGuardArmed) "Guard: ARMED (Motion sensor active)" else "Guard: STANDBY"
+        tvTheftStatus.setTextColor(Color.parseColor(if (isGuardArmed) "#34D399" else "#94A3B8"))
+        btnArmGuard.text = if (isGuardArmed) "Disarm Guard" else "Arm Guard"
+        btnArmGuard.setBackgroundColor(Color.parseColor(if (isGuardArmed) "#B91C1C" else "#059669"))
+        setEngineState(if (isGuardArmed) "Anti-Theft Guard ARMED" else "Anti-Theft Guard STANDBY", "#34D399")
+    }
+
+    private fun loadRules(prefs: android.content.SharedPreferences) {
+        commandRules.clear()
+        val raw = prefs.getString("automation_rules", null)
+        if (raw.isNullOrBlank()) {
+            commandRules.add("siren" to "alarm")
+            commandRules.add("arm guard" to "arm")
+            commandRules.add("disarm guard" to "disarm")
+            return
+        }
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val k = obj.optString("k")
+                val v = obj.optString("v")
+                if (k.isNotBlank() && v.isNotBlank()) commandRules.add(k to v)
+            }
+        } catch (_: Exception) {
+            commandRules.add("siren" to "alarm")
+        }
+    }
+
+    private fun saveRules(prefs: android.content.SharedPreferences) {
+        val arr = JSONArray()
+        for ((k, v) in commandRules) {
+            arr.put(JSONObject().put("k", k).put("v", v))
+        }
+        prefs.edit().putString("automation_rules", arr.toString()).apply()
+    }
+
+    private fun renderRules() {
+        tvRulesSummary.text = if (commandRules.isEmpty()) {
+            "Rules: None"
+        } else {
+            "Rules:\n" + commandRules.joinToString("\n") { "• \"${it.first}\" → ${it.second}" }
+        }
     }
 
     override fun onInit(status: Int) {
@@ -433,98 +609,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
         }
     }
 
-    private fun speakOut(message: String) {
-        if (isTtsReady) {
-            tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "KlyvoraReply")
+    private fun speak(text: String) {
+        if (isTtsReady && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "KV_TTS")
         }
     }
 
-    private fun checkMicAndListen() {
-        val granted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (granted) {
-            startVoiceListening()
-        } else {
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
-    private fun startVoiceListening() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak a KlyvoraVault command")
-        }
+    private fun playSiren() {
         try {
-            speechLauncher.launch(intent)
+            val tg = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+            tg.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 600)
         } catch (_: Exception) {
-            reply("Is device par speech recognition available nahi hai.", "#F87171", speak = false)
         }
     }
 
-    private fun processCommand(input: String, fromVoice: Boolean) {
-        val sourceLabel = if (fromVoice) "Voice" else "Command"
-        tvVoiceResult.text = "$sourceLabel: \"$input\""
-        val lower = input.lowercase(Locale.ROOT)
-        val prefs = getSharedPreferences("KlyvoraVaultSession", Context.MODE_PRIVATE)
-
-        when {
-            lower.contains("disarm") || lower.contains("unlock") || lower.contains("standby") || lower.contains("band") -> {
-                if (isGuardArmed) {
-                    toggleGuardState(prefs)
-                } else {
-                    reply("Protection pehle se STANDBY mode mein hai.", "#FBBF24", speak = true)
-                }
-            }
-            lower.contains("arm") || lower.contains("lock") || lower.contains("guard") || lower.contains("suraksha") || lower.contains("chalu") -> {
-                if (!isGuardArmed) {
-                    toggleGuardState(prefs)
-                } else {
-                    reply("Anti-Theft protection pehle se ARMED hai.", "#34D399", speak = true)
-                }
-            }
-            lower.contains("time") || lower.contains("samay") || lower.contains("date") -> {
-                val now = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
-                reply("Abhi ka samay hai: $now", "#60A5FA", speak = true)
-            }
-            lower.contains("alert") || lower.contains("alarm") || lower.contains("sound") || lower.contains("bajao") -> {
-                playAlertTone()
-                reply("Alert tone bajayi gayi hai.", "#34D399", speak = true)
-            }
-            lower.contains("status") || lower.contains("haal") || lower.contains("kya haal") -> {
-                val guardState = if (isGuardArmed) "ARMED" else "STANDBY"
-                reply("KlyvoraVault active hai. Anti-Theft status: $guardState.", "#60A5FA", speak = true)
-            }
-            lower.contains("help") || lower.contains("command") || lower.contains("kya kar sakte") -> {
-                reply("Commands: 'arm', 'disarm', 'status', 'time', ya 'alert'. Neeche chips bhi use kar sakte hain.", "#93C5FD", speak = true)
-            }
-            else -> {
-                reply("Maine suna: \"$input\". Action ke liye 'arm', 'disarm', 'status', 'time' ya 'alert' bolein.", "#60A5FA", speak = true)
-            }
-        }
-    }
-
-    private fun toggleGuardState(prefs: android.content.SharedPreferences) {
-        isGuardArmed = !isGuardArmed
-        prefs.edit().putBoolean("anti_theft_armed", isGuardArmed).apply()
-
-        tvTheftStatus.text = if (isGuardArmed) {
-            "Protection status: ARMED (Motion alert active)"
-        } else {
-            "Protection status: STANDBY"
-        }
-        tvTheftStatus.setTextColor(Color.parseColor(if (isGuardArmed) "#34D399" else "#94A3B8"))
-        btnArmTheft.text = if (isGuardArmed) "Disarm Protection" else "Arm Protection"
-
-        val msg = if (isGuardArmed) {
-            "Anti-Theft protection ARMED ho gaya hai. Phone hilne par alert bajega."
-        } else {
-            "Anti-Theft protection STANDBY par set kar diya gaya hai."
-        }
-        reply(msg, if (isGuardArmed) "#34D399" else "#FBBF24", speak = true)
+    private fun setEngineState(msg: String, hex: String) {
+        tvEngineState.text = msg
+        tvEngineState.setTextColor(Color.parseColor(hex))
     }
 
     override fun onResume() {
@@ -540,6 +641,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
     }
 
     override fun onDestroy() {
+        stopContinuousEngine()
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
@@ -547,43 +649,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (!isGuardArmed || event?.sensor?.type != Sensor.TYPE_ACCELEROMETER) return
-
         val x = event.values[0]
         val y = event.values[1]
         val z = event.values[2]
         val gForce = sqrt((x * x + y * y + z * z).toDouble()) / SensorManager.GRAVITY_EARTH
-
         if (gForce > 2.2) {
             val now = System.currentTimeMillis()
             if (now - lastShakeTime > 2000L) {
                 lastShakeTime = now
-                playAlertTone()
-                reply("ALERT: Phone mein movement detect hui jab protection ARMED tha!", "#F87171", speak = true)
+                playSiren()
+                setEngineState("THEFT ALERT: Motion detected while ARMED!", "#F87171")
+                speak("Motion alert")
             }
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
-
-    private fun playAlertTone() {
-        try {
-            val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 90)
-            toneGen.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 400)
-        } catch (_: Exception) {
-            // Ignore audio hardware restrictions
-        }
-    }
-
-    private fun reply(msg: String, accentHex: String = "#60A5FA", speak: Boolean = false) {
-        tvAssistantReply.text = msg
-        tvAssistantReply.setTextColor(Color.parseColor(accentHex))
-
-        tvStatusBanner.text = msg
-        tvStatusBanner.setTextColor(Color.parseColor(accentHex))
-        tvStatusBanner.visibility = View.VISIBLE
-
-        if (speak) {
-            speakOut(msg)
-        }
-    }
 }
