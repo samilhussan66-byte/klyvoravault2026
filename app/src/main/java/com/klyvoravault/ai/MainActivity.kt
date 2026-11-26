@@ -15,8 +15,11 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
 import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,18 +27,24 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.sqrt
 
-class MainActivity : AppCompatActivity(), SensorEventListener {
+class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnInitListener {
 
     private lateinit var tvStatusBanner: TextView
+    private lateinit var tvAssistantReply: TextView
     private lateinit var tvVoiceResult: TextView
     private lateinit var tvTheftStatus: TextView
     private lateinit var btnArmTheft: Button
+    private lateinit var etQuickCommand: EditText
 
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
+    private var tts: TextToSpeech? = null
+    private var isTtsReady = false
     private var isGuardArmed = false
     private var lastShakeTime = 0L
 
@@ -46,12 +55,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             val spokenText = matches?.firstOrNull()?.trim().orEmpty()
             if (spokenText.isNotEmpty()) {
-                handleVoiceCommand(spokenText)
+                processCommand(spokenText, fromVoice = true)
             } else {
-                showStatus("No voice input captured. Try speaking again.", "#FBBF24")
+                reply("Kuch sunai nahi diya. Dobara bol kar try karein.", "#FBBF24", speak = false)
             }
         } else {
-            showStatus("Voice listening cancelled.", "#94A3B8")
+            reply("Voice input band kar diya gaya.", "#94A3B8", speak = false)
         }
     }
 
@@ -61,12 +70,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (granted) {
             startVoiceListening()
         } else {
-            showStatus("Microphone permission is required for voice commands.", "#F87171")
+            reply("Voice command ke liye microphone permission zaroori hai.", "#F87171", speak = false)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        tts = TextToSpeech(this, this)
 
         val prefs = getSharedPreferences("KlyvoraVaultSession", Context.MODE_PRIVATE)
         val userEmail = prefs.getString("user_email", null)
@@ -156,7 +167,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             layoutParams = lp
         }
 
-        // Voice Card
+        // Voice & Assistant Card with multiple quick options
         val voiceCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#0F172A", "#1E293B", 20f)
@@ -170,7 +181,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         val tvVoiceBadge = TextView(this).apply {
-            text = "VOICE MODULE"
+            text = "ASSISTANT & VOICE"
             setTextColor(Color.parseColor("#93C5FD"))
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
@@ -183,29 +194,113 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         val tvVoiceTitle = TextView(this).apply {
-            text = "Voice Command Engine"
+            text = "Klyvora Command Center"
             setTextColor(Color.parseColor("#F8FAFC"))
             textSize = 17f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(10f), 0, dp(4f))
         }
 
-        val tvVoiceDesc = TextView(this).apply {
-            text = "Tap below to speak a command (e.g., \"arm protection\", \"disarm\", \"status\")."
-            setTextColor(Color.parseColor("#94A3B8"))
+        tvAssistantReply = TextView(this).apply {
+            text = "Assistant ready. Bolen ya neeche diye gaye options chunein."
+            setTextColor(Color.parseColor("#93C5FD"))
             textSize = 13f
+            setPadding(0, dp(2f), 0, dp(6f))
         }
 
         tvVoiceResult = TextView(this).apply {
-            text = "Last command: None"
-            setTextColor(Color.parseColor("#CBD5E1"))
-            textSize = 13f
-            visibility = View.VISIBLE
-            setPadding(0, dp(10f), 0, 0)
+            text = "Last input: None"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12f
         }
 
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(12f)
+            layoutParams = lp
+        }
+
+        etQuickCommand = EditText(this).apply {
+            hint = "Command likhein (e.g. status, time, arm)"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#64748B"))
+            textSize = 13f
+            background = box("#090E1A", "#263244", 12f)
+            setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(8f)
+            }
+        }
+
+        val btnRunText = Button(this).apply {
+            text = "Run"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            isAllCaps = false
+            background = box("#2563EB", null, 12f)
+            setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
+            setOnClickListener {
+                val cmd = etQuickCommand.text.toString().trim()
+                if (cmd.isNotEmpty()) {
+                    processCommand(cmd, fromVoice = false)
+                } else {
+                    reply("Pehle koi command likhein ya mic dabayein.", "#FBBF24", speak = false)
+                }
+            }
+        }
+
+        inputRow.addView(etQuickCommand)
+        inputRow.addView(btnRunText)
+
+        // Multiple quick action chips
+        val chipsScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(12f)
+            layoutParams = lp
+        }
+
+        val chipsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        fun quickChip(label: String, commandToRun: String): Button {
+            return Button(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#E2E8F0"))
+                textSize = 12f
+                isAllCaps = false
+                background = box("#111C33", "#263244", 10f)
+                setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+                val clp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    rightMargin = dp(8f)
+                }
+                layoutParams = clp
+                setOnClickListener {
+                    processCommand(commandToRun, fromVoice = false)
+                }
+            }
+        }
+
+        chipsRow.addView(quickChip("System Status", "status"))
+        chipsRow.addView(quickChip("Time & Date", "time"))
+        chipsRow.addView(quickChip("Test Alert Tone", "alert"))
+        chipsRow.addView(quickChip("All Commands", "help"))
+        chipsScroll.addView(chipsRow)
+
         val btnListen = Button(this).apply {
-            text = "Listen Voice Command"
+            text = "Speak Voice Command"
             setTextColor(Color.WHITE)
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
@@ -225,8 +320,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         voiceCard.addView(tvVoiceBadge)
         voiceCard.addView(tvVoiceTitle)
-        voiceCard.addView(tvVoiceDesc)
+        voiceCard.addView(tvAssistantReply)
         voiceCard.addView(tvVoiceResult)
+        voiceCard.addView(inputRow)
+        voiceCard.addView(chipsScroll)
         voiceCard.addView(btnListen)
 
         // Anti-Theft Card
@@ -329,6 +426,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         setContentView(scroll)
     }
 
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.language = Locale.getDefault()
+            isTtsReady = true
+        }
+    }
+
+    private fun speakOut(message: String) {
+        if (isTtsReady) {
+            tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "KlyvoraReply")
+        }
+    }
+
     private fun checkMicAndListen() {
         val granted = ContextCompat.checkSelfPermission(
             this,
@@ -337,8 +447,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         if (granted) {
             startVoiceListening()
-        } else if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO)) {
-            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         } else {
             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -353,32 +461,48 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         try {
             speechLauncher.launch(intent)
         } catch (_: Exception) {
-            showStatus("Speech recognition is not available on this device.", "#F87171")
+            reply("Is device par speech recognition available nahi hai.", "#F87171", speak = false)
         }
     }
 
-    private fun handleVoiceCommand(spokenText: String) {
-        tvVoiceResult.text = "Last command: \"$spokenText\""
-        val lower = spokenText.lowercase(Locale.ROOT)
+    private fun processCommand(input: String, fromVoice: Boolean) {
+        val sourceLabel = if (fromVoice) "Voice" else "Command"
+        tvVoiceResult.text = "$sourceLabel: \"$input\""
+        val lower = input.lowercase(Locale.ROOT)
         val prefs = getSharedPreferences("KlyvoraVaultSession", Context.MODE_PRIVATE)
 
         when {
-            lower.contains("arm") || lower.contains("lock") || lower.contains("guard") -> {
-                if (!isGuardArmed) {
-                    toggleGuardState(prefs)
-                } else {
-                    showStatus("Anti-Theft protection is already ARMED.", "#34D399")
-                }
-            }
-            lower.contains("disarm") || lower.contains("unlock") || lower.contains("standby") -> {
+            lower.contains("disarm") || lower.contains("unlock") || lower.contains("standby") || lower.contains("band") -> {
                 if (isGuardArmed) {
                     toggleGuardState(prefs)
                 } else {
-                    showStatus("Anti-Theft protection is already in STANDBY.", "#FBBF24")
+                    reply("Protection pehle se STANDBY mode mein hai.", "#FBBF24", speak = true)
                 }
             }
+            lower.contains("arm") || lower.contains("lock") || lower.contains("guard") || lower.contains("suraksha") || lower.contains("chalu") -> {
+                if (!isGuardArmed) {
+                    toggleGuardState(prefs)
+                } else {
+                    reply("Anti-Theft protection pehle se ARMED hai.", "#34D399", speak = true)
+                }
+            }
+            lower.contains("time") || lower.contains("samay") || lower.contains("date") -> {
+                val now = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date())
+                reply("Abhi ka samay hai: $now", "#60A5FA", speak = true)
+            }
+            lower.contains("alert") || lower.contains("alarm") || lower.contains("sound") || lower.contains("bajao") -> {
+                playAlertTone()
+                reply("Alert tone bajayi gayi hai.", "#34D399", speak = true)
+            }
+            lower.contains("status") || lower.contains("haal") || lower.contains("kya haal") -> {
+                val guardState = if (isGuardArmed) "ARMED" else "STANDBY"
+                reply("KlyvoraVault active hai. Anti-Theft status: $guardState.", "#60A5FA", speak = true)
+            }
+            lower.contains("help") || lower.contains("command") || lower.contains("kya kar sakte") -> {
+                reply("Commands: 'arm', 'disarm', 'status', 'time', ya 'alert'. Neeche chips bhi use kar sakte hain.", "#93C5FD", speak = true)
+            }
             else -> {
-                showStatus("Heard: \"$spokenText\"", "#60A5FA")
+                reply("Maine suna: \"$input\". Action ke liye 'arm', 'disarm', 'status', 'time' ya 'alert' bolein.", "#60A5FA", speak = true)
             }
         }
     }
@@ -395,14 +519,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         tvTheftStatus.setTextColor(Color.parseColor(if (isGuardArmed) "#34D399" else "#94A3B8"))
         btnArmTheft.text = if (isGuardArmed) "Disarm Protection" else "Arm Protection"
 
-        showStatus(
-            if (isGuardArmed) {
-                "Anti-Theft protection is now ARMED. Sudden movement will trigger an alert."
-            } else {
-                "Anti-Theft protection set to STANDBY."
-            },
-            if (isGuardArmed) "#34D399" else "#FBBF24"
-        )
+        val msg = if (isGuardArmed) {
+            "Anti-Theft protection ARMED ho gaya hai. Phone hilne par alert bajega."
+        } else {
+            "Anti-Theft protection STANDBY par set kar diya gaya hai."
+        }
+        reply(msg, if (isGuardArmed) "#34D399" else "#FBBF24", speak = true)
     }
 
     override fun onResume() {
@@ -415,6 +537,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onPause() {
         super.onPause()
         sensorManager?.unregisterListener(this)
+    }
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        super.onDestroy()
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -430,7 +558,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (now - lastShakeTime > 2000L) {
                 lastShakeTime = now
                 playAlertTone()
-                showStatus("ALERT: Sudden movement detected while protection is ARMED!", "#F87171")
+                reply("ALERT: Phone mein movement detect hui jab protection ARMED tha!", "#F87171", speak = true)
             }
         }
     }
@@ -442,13 +570,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 90)
             toneGen.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 400)
         } catch (_: Exception) {
-            // Ignore audio device errors on restricted hardware
+            // Ignore audio hardware restrictions
         }
     }
 
-    private fun showStatus(msg: String, accentHex: String = "#60A5FA") {
+    private fun reply(msg: String, accentHex: String = "#60A5FA", speak: Boolean = false) {
+        tvAssistantReply.text = msg
+        tvAssistantReply.setTextColor(Color.parseColor(accentHex))
+
         tvStatusBanner.text = msg
         tvStatusBanner.setTextColor(Color.parseColor(accentHex))
         tvStatusBanner.visibility = View.VISIBLE
+
+        if (speak) {
+            speakOut(msg)
+        }
     }
 }
