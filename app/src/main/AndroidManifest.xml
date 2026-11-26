@@ -1,64 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#121417"
-    android:padding="20dp">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="KlyvoraVault"
-            android:textColor="#FFFFFF"
-            android:textSize="28sp"
-            android:textStyle="bold" />
+    <application
+        android:allowBackup="true"
+        android:label="KlyvoraVault"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="Sign in to continue"
-            android:textColor="#9FB0C3"
-            android:textSize="15sp" />
+        <activity
+            android:name=".LoginActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
-        <EditText
-            android:id="@+id/etEmail"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="28dp"
-            android:background="#1E242B"
-            android:hint="Email address"
-            android:inputType="textEmailAddress"
-            android:paddingLeft="14dp"
-            android:paddingRight="14dp"
-            android:textColor="#FFFFFF"
-            android:textColorHint="#7C8B9E" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
 
-        <EditText
-            android:id="@+id/etPassword"
-            android:layout_width="match_parent"
-            android:layout_height="52dp"
-            android:layout_marginTop="14dp"
-            android:background="#1E242B"
-            android:hint="Password"
-            android:inputType="textPassword"
-            android:paddingLeft="14dp"
-            android:paddingRight="14dp"
-            android:textColor="#FFFFFF"
-            android:textColorHint="#7C8B9E" />
+    </application>
 
-        <Button
-            android:id="@+id/btnLogin"
-            android:layout_width="match_parent"
-            android:layout_height="54dp"
-            android:layout_marginTop="22dp"
-            android:backgroundTint="#2563EB"
-            android:text="Login"
-            android:textAllCaps="false"
-            android:textColor="#FFFFFF"
+</manifest>
