@@ -83,11 +83,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
         super.onCreate(savedInstanceState)
 
         tts = TextToSpeech(this, this)
-        cameraManager = getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        val camMgr = getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        cameraManager = camMgr
         try {
-            cameraId = cameraManager?.cameraIdList?.firstOrNull { id ->
-                cameraManager?.getCameraCharacteristics(id)
-                    ?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            cameraId = camMgr?.cameraIdList?.firstOrNull { id ->
+                camMgr.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             }
         } catch (_: Exception) {
             cameraId = null
@@ -160,7 +161,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
             setPadding(dp(18f), dp(22f), dp(18f), dp(28f))
         }
 
-        // Top Brand Bar
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#111C33", "#2563EB", 20f)
@@ -181,7 +181,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
             setPadding(0, dp(4f), 0, 0)
         })
 
-        // 1. Voice Control Card (Direct & Instant)
         val voiceCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#0F172A", "#1E293B", 20f)
@@ -269,7 +268,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
         voiceCard.addView(wakeToggleRow)
         voiceCard.addView(wakeEditRow)
 
-        // 2. Language & Access Card
         val langAccessCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#0F172A", "#1E293B", 20f)
@@ -312,7 +310,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
         langAccessCard.addView(langRow)
         langAccessCard.addView(accessRow)
 
-        // 3. Anti-Theft Guard Card
         val theftCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = box("#0F172A", "#1E293B", 20f)
@@ -540,14 +537,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
     }
 
     private fun toggleTorch() {
-        val id = cameraId
-        if (id == null || cameraManager == null) {
+        val currentId = cameraId
+        val currentCam = cameraManager
+        if (currentId == null || currentCam == null) {
             setStatus("Flashlight available nahi hai.", "#F87171", speak = false)
             return
         }
         try {
             isTorchOn = !isTorchOn
-            cameraManager?.setTorchMode(id, isTorchOn)
+            currentCam.setTorchMode(currentId, isTorchOn)
             setStatus(
                 if (isTorchOn) "Flashlight ON." else "Flashlight OFF.",
                 if (isTorchOn) "#34D399" else "#FBBF24",
@@ -613,9 +611,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener, TextToSpeech.OnIn
 
     override fun onDestroy() {
         stopVoiceEngine()
-        if (isTorchOn && cameraId != null) {
+        val currentId = cameraId
+        val currentCam = cameraManager
+        if (isTorchOn && currentId != null && currentCam != null) {
             try {
-                cameraManager?.setTorchMode(cameraId, false)
+                currentCam.setTorchMode(currentId, false)
             } catch (_: Exception) {
             }
         }
